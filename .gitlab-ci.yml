@@ -1,0 +1,46 @@
+default:
+  image: python:${PYTHON_VERSION}
+  before_script:
+    - pip install uv
+    - uv sync --extra tests --python python3
+
+variables:
+  UV_PYTHON_DOWNLOADS: "never"
+
+cache:
+  key: uv-${PYTHON_VERSION}
+  paths:
+    - ~/.cache/uv
+
+stages:
+  - test
+
+.test-template: &test-template
+  stage: test
+  script:
+    - uv run pytest src/yt_dyablo/tests/ -v
+
+test-python-3.10:
+  <<: *test-template
+  variables:
+    PYTHON_VERSION: "3.10"
+
+test-python-3.11:
+  <<: *test-template
+  variables:
+    PYTHON_VERSION: "3.11"
+
+test-python-3.12:
+  <<: *test-template
+  variables:
+    PYTHON_VERSION: "3.12"
+
+test-python-3.13:
+  <<: *test-template
+  variables:
+    PYTHON_VERSION: "3.13"
+
+test-python-3.14:
+  <<: *test-template
+  variables:
+    PYTHON_VERSION: "3.14"
