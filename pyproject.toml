@@ -10,7 +10,7 @@ requires-python = ">=3.10.4"
 dependencies = [
     "h5py",
     "numpy>=1.21.2",
-    "yt @ git+https://github.com/cphyc/yt.git@feature/support-non-cubic-zones",
+    "yt @ git+https://github.com/yt-project/yt.git@main",
     "unyt",
 ]
 
