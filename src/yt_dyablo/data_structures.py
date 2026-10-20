@@ -482,7 +482,16 @@ class DyabloDataset(Dataset):
 
         largest_cell = np.max(cell_sizes, axis=0)
 
-        n_blocks = np.ceil(domain_size / (largest_cell * NML)).astype(int)
+        raw_n_blocks = domain_size / (largest_cell * NML)
+        nearest_int = np.rint(raw_n_blocks)
+        # Handle round-off errors when doing integer division
+        n_blocks = np.where(
+            np.isclose(raw_n_blocks, nearest_int, rtol=1e-6, atol=1e-8),
+            nearest_int,
+            np.ceil(raw_n_blocks),
+        ).astype(int)
+        # and make sure there's at least one block
+        n_blocks = np.maximum(n_blocks, 1)
         return NML, n_blocks
 
     def _parse_parameter_file(self):
