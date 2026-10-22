@@ -79,19 +79,24 @@ class DyabloOctreeIndex(OctreeIndex):
         block_centers = np.zeros((n_blocks, 3), dtype=np.float64)
         block_levels = np.zeros(n_blocks, dtype=np.uint64)
 
-        # Reshape connectivity to group cells by block: (n_blocks, cells_per_block, 8)
+        # Reshape connectivity to group cells by block: (n_blocks, cells_per_block, nvertices)
+        nvert = connectivity.shape[1]  # 4 (2D) or 8 (3D)
+        if nvert not in (4, 8):
+            raise ValueError(f"Unexpected connectivity : {nvert} vertices per cell")
+        opposite = nvert - 2  # opposite summit ot summit 0
+
         block_connectivity = connectivity[: n_blocks * cells_per_block].reshape(
-            n_blocks, cells_per_block, 8
+            n_blocks, cells_per_block, nvert
         )
 
-        # Extract only min (vertex 0) and max (vertex 6) corners to save memory
-        # Standard hex cell ordering: vertex 0 is front-left-bottom, vertex 6 is back-right-top
+        # Extract only min (vertex 0) and max (vertex 2 or 6) corners to save memory
+        # Standard hex cell ordering: vertex 0 is front-left-bottom, vertex 2-6 is back-right-top
         min_corners = coordinates[
             block_connectivity[:, :, 0]
         ]  # (n_blocks, cells_per_block, 3)
         max_corners = coordinates[
-            block_connectivity[:, :, 6]
-        ]  # (n_blocks, cells_per_block, 3)
+            block_connectivity[:, :, opposite]
+        ]  # (n_blocks, cells_per_block, opposite_vertex)
 
         # Compute block bounds for all blocks at once
         block_min = np.min(min_corners, axis=1)  # (n_blocks, 3)
@@ -132,14 +137,17 @@ class DyabloOctreeIndex(OctreeIndex):
             )
             self.ds.min_level = lvl_min
 
+        if self.ds.dimensionality == 2:
+            block_centers[:, 2] = float(self.ds.z_plane)
         # Count number of blocks - note that a block at level l
         # requires its parent blocks at levels < l to be present
         # so we need to add them as well
         levels, counts = np.unique(block_levels, return_counts=True)
         n_blocks_with_parents = 0
+        nchild = 4 if self.ds.dimensionality == 2 else 8
         for lvl, count in zip(levels, counts, strict=True):
             for i in range(lvl + 1):
-                n_blocks_with_parents += count / (8 ** (lvl - i))
+                n_blocks_with_parents += count / (nchild ** (lvl - i))
 
         n_blocks_with_parents = int(np.ceil(n_blocks_with_parents))
         # Allocate space for blocks
@@ -311,7 +319,7 @@ class DyabloOctreeSubset(OctreeSubset):
 
         # Early exit if no cells are selected
         if cell_count == 0:
-            return {}
+            return {field: np.zeros(0, "float64") for field in fields}
 
         _level_inds, cell_inds, file_inds = oct_handler.file_index_octs(
             selector, 1, cell_count
@@ -345,6 +353,11 @@ class DyabloOctreeSubset(OctreeSubset):
 
         return data
 
+    def select_fwidth(self, dobj):
+        fwidth = super().select_fwidth(dobj)
+        if self.ds.dimensionality == 2:
+            fwidth[:, 2] = self.ds.domain_width[2]   # dz indépendant du niveau
+        return fwidth
 
 class DyabloDataset(Dataset):
     """Dataset class for Dyablo code output files."""
@@ -482,7 +495,12 @@ class DyabloDataset(Dataset):
 
         largest_cell = np.max(cell_sizes, axis=0)
 
-        raw_n_blocks = domain_size / (largest_cell * NML)
+        # raw_n_blocks = domain_size / (largest_cell * NML)
+        # To avoid a Nan when 2D, L=0 ?
+        with np.errstate(divide="ignore", invalid="ignore"):
+            raw_n_blocks = domain_size / (largest_cell * NML)
+        raw_n_blocks = np.where(np.isfinite(raw_n_blocks), raw_n_blocks, 1.0)
+
         nearest_int = np.rint(raw_n_blocks)
         # Handle round-off errors when doing integer division
         n_blocks = np.where(
@@ -509,6 +527,9 @@ class DyabloDataset(Dataset):
             coordinates = f["/coordinates"][:]
             connectivity = f["/connectivity"][:]
 
+        is_2d = connectivity.shape[1] == 4 # Quadrilateral ?
+        if coordinates.shape[1] == 2:
+            coordinates = np.column_stack([coordinates, np.zeros(len(coordinates))])
         # Also store simulation name into metadata
         sim_name = HYDRO_FILE_PATTERN.match(Path(self.parameter_filename).name).group(1)
         metadata["name"] = sim_name
@@ -537,7 +558,8 @@ class DyabloDataset(Dataset):
             periodicity = self.periodicity_override
         else:
             periodicity = (False, False, False)
-
+        if is_2d:
+            periodicity = (*periodicity[:2], False)
         # Get block size - try metadata first, then infer from connectivity
         if "block_size" in metadata:
             block_size = tuple(int(x) for x in metadata["block_size"][:3])
@@ -554,6 +576,9 @@ class DyabloDataset(Dataset):
                 n_blocks,
             )
 
+        block_size = tuple(int(x) for x in block_size)
+        block_size += (1,) * (3 - len(block_size))
+
         # Infer min level
         min_level = np.max(np.log2(block_size).astype(int))
 
@@ -566,6 +591,15 @@ class DyabloDataset(Dataset):
             max_level = min_level  # Default: no refinement
 
         current_time = float(metadata.get("time", 0.0))
+
+        domain_left = np.array(domain_left, dtype=np.float64)
+        domain_right = np.array(domain_right, dtype=np.float64)
+        if is_2d and domain_right[2] <= domain_left[2]:
+            dz = max(
+                (domain_right[0] - domain_left[0]) / (n_blocks[0] * block_size[0]),
+                (domain_right[1] - domain_left[1]) / (n_blocks[1] * block_size[1]),
+            )
+            domain_right[2] = domain_left[2] + dz
 
         # Set dataset parameters
         self.domain_left_edge = np.array(domain_left, dtype=np.float64)
@@ -588,7 +622,8 @@ class DyabloDataset(Dataset):
         self.block_size = block_size
         # If we only have one block in a given dimension,
         # decrease dimensionality
-        self.dimensionality = 3 - (n_blocks == 1).sum()
+        # self.dimensionality = 3 - (n_blocks == 1).sum()
+        self.dimensionality = 2 if is_2d else 3
 
         # Store connectivity and coordinates for later use
         self._connectivity = connectivity
@@ -696,3 +731,10 @@ class DyabloDataset(Dataset):
 
         # Register dyablo as a fluid type
         self.fluid_types += ("dyablo",)
+
+    @property
+    def z_plane(self):
+        """Height z where the 2D data live (available after the index creation)."""
+        T = self.domain_right_edge[2] - self.domain_left_edge[2]
+        return self.domain_left_edge[2] + 0.25 * T / 2 ** int(self.max_level)
+        
