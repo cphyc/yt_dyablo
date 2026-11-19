@@ -23,6 +23,7 @@ class DyabloFieldInfo(FieldInfoContainer):
         ("rho_vy", (mom_units, ["density_times_velocity_y"], None)),
         ("rho_vz", (mom_units, ["density_times_velocity_z"], None)),
         ("e_tot", (en_units, ["total_energy_density"], None)),
+        ("e_int", (en_units, ["internal_energy_density"], None)),
         ("metallicity", ("dimensionless", ["metallicity"], None)),
     )
 
@@ -88,7 +89,8 @@ class DyabloFieldInfo(FieldInfoContainer):
         # Create pressure
         gamma = self.ds.parameters.get("gamma", 5.0 / 3.0)
 
-        def _pressure(data):
+        def _pressure_no_dual(data):
+            # derive internal energy from total energy and kinetic energy
             kinetic_energy = 0.5 * (
                 data["gas", "velocity_x"] ** 2
                 + data["gas", "velocity_y"] ** 2
@@ -98,13 +100,24 @@ class DyabloFieldInfo(FieldInfoContainer):
                 data["dyablo", "e_tot"] / data["dyablo", "rho"] - kinetic_energy
             )
             return (gamma - 1.0) * data["dyablo", "rho"] * internal_energy
+        def _pressure_dual(data):
+            # derive pressure from internal energy directly if it exists
+            return (gamma - 1.0) * data["dyablo", "e_int"]
 
-        self.add_field(
-            ("gas", "pressure"),
-            sampling_type="cell",
-            function=_pressure,
-            units=self.ds.unit_system["pressure"],
-        )
+        if ('dyablo', 'e_int') not in self.ds.field_list:
+            self.add_field(
+                ("gas", "pressure"),
+                sampling_type="cell",
+                function=_pressure_no_dual,
+                units=self.ds.unit_system["pressure"],
+            )
+        else:
+            self.add_field(
+                ("gas", "pressure"),
+                sampling_type="cell",
+                function=_pressure_dual,
+                units=self.ds.unit_system["pressure"],
+            )
 
         # Create temperature
         def _temperature_over_mu(data):
