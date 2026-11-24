@@ -10,6 +10,8 @@ requires-python = ">=3.10.4"
 dependencies = [
     "h5py",
     "numpy>=1.21.2",
+    # We need the development version of yt until 4.5.0 is out
+    # because we rely on https://github.com/yt-project/yt/pull/5391
     "yt @ git+https://github.com/yt-project/yt.git@main",
     "unyt",
 ]
