@@ -538,6 +538,23 @@ class DyabloDataset(Dataset):
         else:
             periodicity = (False, False, False)
 
+        # Get cosmology
+        if "aexp" in self.parameters and self.parameters["aexp"] > 0:
+            self.cosmological_simulation = True
+            self.current_redshift = 1 / self.parameters["aexp"] - 1
+            self.omega_matter = 0.3111
+            self.omega_lambda = 0.6889
+            self.hubble_constant = 67.66 / 100
+            domain_left *= self.parameters["aexp"]
+            domain_right *= self.parameters["aexp"]
+            coordinates *= self.parameters["aexp"]
+        else:
+            self.cosmological_simulation = False
+            self.current_redshift = 0
+            self.omega_matter = 0
+            self.omega_lambda = 0
+            self.hubble_constant = 0
+
         # Get block size - try metadata first, then infer from connectivity
         if "block_size" in metadata:
             block_size = tuple(int(x) for x in metadata["block_size"][:3])
@@ -581,8 +598,7 @@ class DyabloDataset(Dataset):
         self._periodicity = periodicity
         self.refine_by = 2  # Dyablo uses factor-of-2 refinement
         self.current_time = current_time
-        self.current_redshift = 0
-        self.cosmological_simulation = False
+
         self.min_level = min_level
         self.max_level = max_level
         self.block_size = block_size

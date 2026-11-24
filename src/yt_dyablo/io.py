@@ -117,13 +117,15 @@ class DyabloIOHandler(BaseIOHandler):
         if isinstance(filename, str):
             filename = [filename]
 
+        aexp = 1 / (1 + self.ds.current_redshift)
+
         for ptype in ptf:
             coords_list = []
             for fname in filename:
                 try:
                     with h5py.File(fname, "r") as f:
                         if "/coordinates" in f:
-                            data = f["/coordinates"][:]
+                            data = f["/coordinates"][:] * aexp
                             # Extract x, y, z coordinates
                             if data.ndim == 2 and data.shape[1] >= 3:
                                 coords_list.append(data)
@@ -165,13 +167,15 @@ class DyabloIOHandler(BaseIOHandler):
         iteration = self.ds.parameters["iter"]
         root_folder = self.ds.root_folder
 
+        aexp = 1 / (1 + self.ds.current_redshift)
+
         for ptype in ptf:
             fname = PARTICLE_FILE_TEMPLATE.format(
                 name=name, ptype=ptype, iter=iteration
             )
             with h5py.File(root_folder / fname, "r") as f:
                 # Read the coordinates to apply selections
-                coords = f["/coordinates"][:]
+                coords = f["/coordinates"][:] * aexp
 
                 # Apply selection
                 mask = selector.select_points(*coords.T, radii=0)
