@@ -20,6 +20,7 @@ def create_test_file(
     left_edge: npt.NDArray[np.float64],
     right_edge: npt.NDArray[np.float64],
     seed: int = 42,
+    units: list | None = None,
 ):
     """Create a small test HDF5 file for Dyablo."""
     n_blocks = np.asarray(n_blocks)
@@ -109,11 +110,15 @@ def create_test_file(
         f.create_group("scalar_data")
         f["scalar_data"].attrs.update({"aexp": 1.0, "iter": iteration, "time": 123.0})
 
+        if units:
+            f["units"] = units
+
 
 # Expected fluid fields written by create_test_file
 _FLUID_FIELDS = ["rho", "rho_vx", "rho_vy", "rho_vz", "e_tot", "test_field"]
 
 
+@pytest.mark.parametrize("units", [None, [1.0, 2.0, 3.0], [1.0, 2.0, 3.0, 4.0]])
 @pytest.mark.parametrize(
     "n_blocks, block_size",
     [
@@ -127,7 +132,7 @@ _FLUID_FIELDS = ["rho", "rho_vx", "rho_vy", "rho_vz", "e_tot", "test_field"]
         ([2, 4, 6], [3, 5, 7]),
     ],
 )
-def test_dyablo_mock_dataset(tmp_path, n_blocks, block_size):
+def test_dyablo_mock_dataset(tmp_path, n_blocks, block_size, units):
     n_blocks = np.asarray(n_blocks)
     block_size = np.asarray(block_size)
 
@@ -137,6 +142,7 @@ def test_dyablo_mock_dataset(tmp_path, n_blocks, block_size):
         block_size=block_size,
         left_edge=np.zeros(3),
         right_edge=np.ones(3),
+        units=units,
     )
 
     fpath = next(tmp_path.glob("*.h5"))
@@ -170,6 +176,31 @@ def test_dyablo_mock_dataset(tmp_path, n_blocks, block_size):
     rho = ad["gas", "density"]
     assert rho.shape == (expected_n_cells,)
     assert not np.any(np.isnan(rho))
+
+    if units is not None:
+        assert (
+            ds.length_unit == units[0]
+        ), f"Expected length unit {units[0]}, got {ds.length_unit}"
+        assert (
+            ds.mass_unit == units[1]
+        ), f"Expected mass unit {units[1]}, got {ds.mass_unit}"
+        assert (
+            ds.time_unit == units[2]
+        ), f"Expected time unit {units[2]}, got {ds.time_unit}"
+
+        # Make sure we can convert properly
+        length = ds.quan(1, "code_length").to("cm")
+        assert (
+            length == units[0]
+        ), f"Length unit conversion failed: expected {units[0]}, got {length}"
+        mass = ds.quan(1, "code_mass").to("g")
+        assert (
+            mass == units[1]
+        ), f"Mass unit conversion failed: expected {units[1]}, got {mass}"
+        time = ds.quan(1, "code_time").to("s")
+        assert (
+            time == units[2]
+        ), f"Time unit conversion failed: expected {units[2]}, got {time}"
 
 
 def test_dyablo_mock_dataset_edges(tmp_path):
