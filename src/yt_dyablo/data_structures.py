@@ -2,6 +2,7 @@
 Data structures for Dyablo frontend.
 """
 
+from functools import cached_property
 from pathlib import Path
 
 import h5py
@@ -404,6 +405,25 @@ class DyabloDataset(Dataset):
         self.block_size_override = block_size
         self.max_level_override = max_level
 
+        # Get the metadata to obtain expansion factor
+        self._input_filename = filename
+        aexp = self.__metadata.get("aexp", 1)
+        aexp_factors = {
+            "length_unit": 1 / aexp,
+            "density_unit": aexp**3,
+            "velocity_unit": aexp,
+            "time_unit": 1 / aexp**2,
+            "pressure_unit": aexp**5,
+            "energy_unit": aexp**2,
+        }
+        print(aexp, units_override)
+        if aexp != 1 and units_override is not None:
+            for key, aexp_f in aexp_factors.items():
+                if key not in units_override:
+                    continue
+                old_v, units = units_override[key]
+                units_override[key] = (old_v / aexp_f, units)
+
         super().__init__(
             filename,
             dataset_type=dataset_type,
@@ -494,8 +514,8 @@ class DyabloDataset(Dataset):
         n_blocks = np.maximum(n_blocks, 1)
         return NML, n_blocks
 
-    def _parse_parameter_file(self):
-        """Parse metadata from the HDF5 file."""
+    @cached_property
+    def __metadata(self):
         # Open the hydro file
         with h5py.File(self.parameter_filename, "r") as f:
             # Try to read metadata
@@ -506,12 +526,19 @@ class DyabloDataset(Dataset):
                 scalar_attrs = dict(f["/scalar_data"].attrs)
                 metadata.update(scalar_attrs)
 
-            coordinates = f["/coordinates"][:]
-            connectivity = f["/connectivity"][:]
-
         # Also store simulation name into metadata
         sim_name = HYDRO_FILE_PATTERN.match(Path(self.parameter_filename).name).group(1)
         metadata["name"] = sim_name
+
+        return metadata
+
+    def _parse_parameter_file(self):
+        """Parse metadata from the HDF5 file."""
+        # Open the hydro file
+        metadata = self.__metadata
+        with h5py.File(self.parameter_filename, "r") as f:
+            coordinates = f["/coordinates"][:]
+            connectivity = f["/connectivity"][:]
 
         self.parameters.update(metadata)
 
@@ -537,17 +564,16 @@ class DyabloDataset(Dataset):
             periodicity = self.periodicity_override
         else:
             periodicity = (False, False, False)
+        print(periodicity)
 
         # Get cosmology
         if "aexp" in self.parameters and self.parameters["aexp"] > 0:
             self.cosmological_simulation = True
             self.current_redshift = 1 / self.parameters["aexp"] - 1
+            # TODO: do not hardcode!
             self.omega_matter = 0.3111
             self.omega_lambda = 0.6889
             self.hubble_constant = 67.66 / 100
-            domain_left *= self.parameters["aexp"]
-            domain_right *= self.parameters["aexp"]
-            coordinates *= self.parameters["aexp"]
         else:
             self.cosmological_simulation = False
             self.current_redshift = 0

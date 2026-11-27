@@ -2,6 +2,7 @@
 Field definitions for Dyablo frontend.
 """
 
+import numpy as np
 import unyt
 
 from yt._typing import KnownFieldsT
@@ -88,6 +89,8 @@ class DyabloFieldInfo(FieldInfoContainer):
         # Create pressure
         gamma = self.ds.parameters.get("gamma", 5.0 / 3.0)
 
+        has_entropy = ("dyablo", "rho_S") in self.ds.field_list
+
         def _pressure(data):
             kinetic_energy = 0.5 * (
                 data["gas", "velocity_x"] ** 2
@@ -97,7 +100,21 @@ class DyabloFieldInfo(FieldInfoContainer):
             internal_energy = (
                 data["dyablo", "e_tot"] / data["dyablo", "rho"] - kinetic_energy
             )
-            return (gamma - 1.0) * data["dyablo", "rho"] * internal_energy
+
+            P_int = (gamma - 1.0) * data["dyablo", "rho"] * internal_energy
+
+            if has_entropy:
+                # P = S rho^(γ-1)
+                rho = data["rho"].value
+                S = data["rho_S"].value / rho
+                P_entropy = data.apply_units(S * rho ** (gamma - 1), "code_pressure")
+                return np.where(
+                    internal_energy / (internal_energy + kinetic_energy) < 0.5,
+                    P_entropy,
+                    P_int,
+                )
+
+            return P_int
 
         self.add_field(
             ("gas", "pressure"),
@@ -116,6 +133,7 @@ class DyabloFieldInfo(FieldInfoContainer):
             sampling_type="cell",
             function=_temperature_over_mu,
             units=self.ds.unit_system["temperature"],
+            display_name=r"Temperature over $\mu$",
         )
 
     def setup_particle_fields(self, ptype):
